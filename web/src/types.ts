@@ -23,6 +23,12 @@ export interface ExecutionPlan {
   estimated_test_count: number;
 }
 
+export interface AffectedModule {
+  artifact_id: string;
+  label: 'changed' | 'dependent' | 'dependency';
+  reason: string;
+}
+
 export interface ValidationRun {
   run_id: string;
   status: 'pending' | 'running' | 'success' | 'failure' | 'error';
@@ -38,4 +44,8 @@ export interface ValidationRun {
   repo_url?: string;
   feature_branch?: string;
   target_branch?: string;
+  // Impact analysis fields (Phase 5)
+  affected_modules?: AffectedModule[];
+  selected_tests?: string[];
+  risk_level?: string;
 }

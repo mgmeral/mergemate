@@ -73,7 +73,14 @@ export function RunDetail({ runId, onBack }: RunDetailProps) {
         <h1 className="detail-header__title" title={run.repo_url ?? run.run_id}>
           {repoDisplay}
         </h1>
-        <StatusBadge status={run.status} large />
+        <div className="detail-header__badges">
+          <StatusBadge status={run.status} large />
+          {run.risk_level && (
+            <span className={`risk-badge risk-badge--${run.risk_level.toLowerCase()}`}>
+              {run.risk_level}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Meta */}
@@ -165,6 +172,53 @@ export function RunDetail({ runId, onBack }: RunDetailProps) {
         <div className="detail-section">
           <div className="detail-section__title">Maven Command</div>
           <pre className="plan-command">{run.maven_command}</pre>
+        </div>
+      )}
+
+      {/* Affected modules */}
+      {run.affected_modules && run.affected_modules.length > 0 && (
+        <div className="detail-section">
+          <div className="detail-section__title">
+            Affected Modules ({run.affected_modules.length})
+          </div>
+          <ul className="module-list">
+            {run.affected_modules.map((mod) => (
+              <li key={mod.artifact_id} className="module-list__item">
+                <span
+                  className={[
+                    'module-badge',
+                    mod.label === 'changed' ? 'module-badge--changed' : '',
+                    mod.label === 'dependent' ? 'module-badge--dependent' : '',
+                    mod.label === 'dependency' ? 'module-badge--dependency' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                >
+                  {mod.label}
+                </span>
+                <span className="module-list__artifact">{mod.artifact_id}</span>
+                {mod.reason && (
+                  <span className="module-list__reason text-secondary"> — {mod.reason}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Selected tests */}
+      {run.selected_tests && run.selected_tests.length > 0 && (
+        <div className="detail-section">
+          <div className="detail-section__title">
+            Selected Tests ({run.selected_tests.length})
+          </div>
+          <ul className="file-list">
+            {run.selected_tests.map((t) => (
+              <li key={t} className="file-list__mono">
+                {t}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

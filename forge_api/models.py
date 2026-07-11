@@ -35,6 +35,10 @@ class ValidationRunResponse(BaseModel):
     execution_plan: Optional[dict]
     # Failure analysis (re-computed on the fly, not persisted)
     failure_analysis: Optional[dict] = None
+    # Future impact-analysis fields
+    affected_modules: Optional[list[dict]] = None
+    selected_tests: Optional[list[str]] = None
+    risk_level: Optional[str] = None
 
 
 class ValidationListResponse(BaseModel):

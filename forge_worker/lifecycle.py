@@ -134,6 +134,15 @@ class ValidationLifecycle:
         if rc != 0:
             raise RuntimeError(f"git fetch failed (rc={rc}): {stderr}")
 
+    def _step_fetch_target(self) -> None:
+        """Step 2b: Fetch the target branch from origin (needed for merge-base)."""
+        cfg = self._config
+        argv = ["git", "fetch", "origin", cfg.target_branch]
+        rc, stdout, stderr = self._run(argv)
+        self._log.append(f"fetch-target: rc={rc}")
+        if rc != 0:
+            raise RuntimeError(f"git fetch target branch failed (rc={rc}): {stderr}")
+
     def _step_checkout(self) -> None:
         """Step 3: Check out the feature branch."""
         cfg = self._config
@@ -231,6 +240,10 @@ class ValidationLifecycle:
         # Step 2
         self._log.append("step: fetch")
         self._step_fetch()
+
+        # Step 2b: Fetch target branch (needed for merge-base)
+        self._log.append("step: fetch-target")
+        self._step_fetch_target()
 
         # Step 3
         self._log.append("step: checkout")

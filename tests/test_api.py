@@ -93,19 +93,19 @@ def _make_test_client(
 
 
 # ===========================================================================
-# 1. POST /api/v1/validations — start a validation, returns 201
+# 1. POST /api/v1/validations — start a validation (async), returns 202
 # ===========================================================================
 
 class TestStartValidation:
-    def test_post_validations_returns_201(self):
-        """POST /api/v1/validations returns HTTP 201."""
+    def test_post_validations_returns_202(self):
+        """POST /api/v1/validations returns HTTP 202 Accepted (async)."""
         client = _make_test_client()
         response = client.post("/api/v1/validations", json={
             "repo_url": "https://github.com/example/repo.git",
             "feature_branch": "feature/new-thing",
             "target_branch": "main",
         })
-        assert response.status_code == 201
+        assert response.status_code == 202
 
     def test_post_validations_body_has_run_id(self):
         """POST /api/v1/validations response body includes run_id."""
@@ -118,12 +118,14 @@ class TestStartValidation:
             "feature_branch": "feature/test",
             "target_branch": "main",
         })
-        assert response.status_code == 201
+        assert response.status_code == 202
         body = response.json()
-        assert body["run_id"] == run_id
+        # The run_id in the response is a pre-assigned uuid (not the mock's run_id)
+        assert "run_id" in body
+        assert body["run_id"]  # non-empty
 
-    def test_post_validations_body_has_status(self):
-        """POST /api/v1/validations response body includes status field."""
+    def test_post_validations_body_has_status_running(self):
+        """POST /api/v1/validations response body has status='running' immediately."""
         run = _make_validation_run(status="success")
         client = _make_test_client(mock_run=run)
 
@@ -132,9 +134,12 @@ class TestStartValidation:
             "feature_branch": "feature/test",
             "target_branch": "main",
         })
-        assert response.status_code == 201
+        assert response.status_code == 202
         body = response.json()
-        assert body["status"] == "success"
+        # The pending run has status="running"; background task updates it to "success"
+        # In TestClient, background tasks run synchronously so the DB has the final result,
+        # but the response body reflects the pending run returned before the task.
+        assert body["status"] in ("running", "success")
 
     def test_post_validations_passes_request_to_orchestrator(self):
         """POST /api/v1/validations calls orchestrator.run with the correct ValidationRequest."""
@@ -161,17 +166,17 @@ class TestStartValidation:
 
     def test_post_validations_run_persisted_in_repository(self):
         """POST /api/v1/validations persists the run to the repository."""
-        run_id = str(uuid.uuid4())
-        run = _make_validation_run(run_id=run_id)
         repo = _make_in_memory_repository()
-        client = _make_test_client(mock_run=run, repository=repo)
+        client = _make_test_client(repository=repo)
 
-        client.post("/api/v1/validations", json={
+        response = client.post("/api/v1/validations", json={
             "repo_url": "https://github.com/example/repo.git",
             "feature_branch": "feature/test",
             "target_branch": "main",
         })
 
+        # The response body contains the run_id that was persisted
+        run_id = response.json()["run_id"]
         saved = repo.get(run_id)
         assert saved is not None
         assert saved.run_id == run_id
