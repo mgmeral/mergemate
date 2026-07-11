@@ -4,6 +4,15 @@ MergeMate, büyük monolith ve Maven multi-module projelerde **PR/MR açılmadan
 
 Amaç: Jenkins üzerinde her PR için yaklaşık 1 saat süren full build'lerin tükettiği agent kapasitesini azaltmak. MergeMate yalnızca gerçekten etkilenen modülleri ve testleri seçer.
 
+## Kurulum
+
+```bash
+pip install -e ".[dev]"
+
+# Java analizi için (opsiyonel):
+pip install -e ".[java-analysis]"
+```
+
 ## Temel kullanım
 
 ```bash
@@ -19,26 +28,14 @@ mergemate compile --target origin/premaster
 # Etkilenen modülleri verify et
 mergemate verify --target origin/premaster
 
-# Kaynak branch açıkça belirtmek için
+# Seçenekler
 mergemate analyze --source HEAD --target origin/premaster
-
-# Maven profilleri ile
 mergemate analyze --target origin/premaster --profiles local,dev
-
-# JSON çıktısı
+mergemate analyze --target origin/premaster --impact-depth 3
 mergemate analyze --target origin/premaster --json
 ```
 
-## Nasıl çalışır
-
-1. **Merge-base diff**: `git merge-base` üzerinden gerçek değişen dosyaları bulur (iki noktalı diff değil).
-2. **Modül eşleme**: Her değişen dosyayı en derin Maven modülüne atar.
-3. **Etki analizi**: Ters bağımlılık grafı üzerinden etkilenen downstream modülleri bulur.
-4. **Risk değerlendirmesi**: Root POM değişikliği, kritik modüller, yüksek etki oranı → full build önerir.
-5. **Maven komutu üretir**: `./mvnw -pl :order-service,:checkout-api -am test` gibi hedefli komutlar.
-6. **Geçici worktree**: Kullanıcının çalışma kopyasına dokunmaz; geçici git worktree kullanır.
-
-## Örnek analiz çıktısı
+## Örnek çıktı
 
 ```text
 MergeMate Impact Analysis
@@ -61,42 +58,45 @@ Affected modules:
   checkout-api        dependent
   shared-common       dependency
 
+Changed Java production files:
+  services/order-service/src/main/java/.../OrderService.java
+
+Selected tests:
+  OrderServiceTest               HIGH      0.85
+  CheckoutFacadeTest             MEDIUM    0.52
+
+  Reasons (OrderServiceTest):
+    - Name matches changed class OrderService
+    - Directly imports com.example.OrderService
+
 Risk: MEDIUM
 Full validation recommended: NO
 
 Recommended Maven command:
-  ./mvnw -pl :order-service,:checkout-api -am test
+  ./mvnw -pl :order-service,:checkout-api -am \
+    -Dtest=OrderServiceTest,CheckoutFacadeTest test
 ```
 
-## Kurulum
+## Nasıl çalışır
 
-```bash
-pip install -e ".[dev]"
+1. **Merge-base diff** — `git merge-base` üzerinden gerçek değişen dosyaları bulur
+2. **Modül eşleme** — Her dosyayı en derin Maven modülüne atar (deepest ancestor wins)
+3. **Etki analizi** — Ters bağımlılık grafiği üzerinden downstream modülleri bulur
+4. **Java source analizi** — `javalang` AST parser ile import/type reference analizi; 3 seviyeli test seçimi
+5. **Test puanlama** — Her test adayı ağırlıklı sinyaller ile puanlanır (HIGH/MEDIUM/LOW)
+6. **Risk değerlendirmesi** — Root POM, kritik modüller, yüksek etki oranı → full build önerir
+7. **Maven komutu üretir** — `./mvnw -pl :mod-a,:mod-b -am -Dtest=... test`
+8. **Geçici worktree** — Kullanıcının working copy'sine dokunmaz; `git worktree add --detach` kullanır
+
+## Rapor dosyaları
+
+Her validation çalışmasında `.mergemate/runs/<run-id>/` altına yazılır:
+
 ```
-
-## Çalışma modu: Lokal Worktree (varsayılan)
-
-Kullanıcının mevcut lokal ortamını kullanır:
-- Maven executable veya Maven wrapper (`./mvnw` öncelikli)
-- Mevcut JDK ve `JAVA_HOME`
-- Lokal `.m2` cache
-- VPN ve Nexus erişimi
-
-Kullanıcının working tree'sine **dokunulmaz**. Geçici `git worktree` oluşturulur, iş bitince temizlenir (hata durumunda da garanti).
-
-## JDK tespiti
-
-POM dosyalarından otomatik tespit:
-1. `maven.compiler.release` property
-2. `maven-compiler-plugin` `<release>` configuration
-3. `java.version` / `jdk.version` property
-4. `maven.compiler.source` / `target` (fallback)
-5. Parent POM zinciri takibi
-
-Uyumsuzluk durumunda anlaşılır hata:
-```text
-Project requires JDK 17 but Maven is running with JDK 11.
-Configure JAVA_HOME or Maven Toolchains before running validation.
+.mergemate/runs/<run-id>/
+  report.json       # Tam yapılandırılmış rapor
+  stdout.log        # Maven stdout
+  stderr.log        # Maven stderr
 ```
 
 ## Config dosyası
@@ -109,6 +109,10 @@ targetBranch: origin/premaster
 impact:
   maxDepth: 3
   fullBuildThreshold: 0.60
+
+jdk:
+  strict: true
+  allowNewerMajorVersion: true
 
 modules:
   alwaysFullBuild:
@@ -125,59 +129,88 @@ timeouts:
   verifySeconds: 3600
 ```
 
+## JDK tespiti
+
+POM dosyalarından otomatik (öncelik sırası):
+1. `maven.compiler.release` property
+2. `maven-compiler-plugin <release>` configuration
+3. `java.version` / `jdk.version` property
+4. `maven.compiler.source` / `target` fallback
+5. Parent POM zinciri takibi
+
+```text
+Project requires JDK 17 but Maven is running with JDK 11.
+
+Detected from:
+  root pom.xml -> maven.compiler.release
+
+Configure JAVA_HOME or Maven Toolchains before running validation.
+```
+
+## Test puanlama sinyalleri
+
+| Sinyal | Ağırlık |
+|--------|---------|
+| İsim eşleşmesi (OrderService → OrderServiceTest) | 0.40 |
+| Direct import | 0.35 |
+| Type reference | 0.25 |
+| 1-hop ters bağımlılık | 0.20 |
+| 2-hop ters bağımlılık | 0.12 |
+| 3-hop ters bağımlılık | 0.06 |
+| Aynı Maven modülü | 0.10 |
+| Aynı package | 0.08 |
+| Downstream modülde | 0.05 |
+| IT testi (küçük ceza) | -0.05 |
+
 ## Mimari
 
 ```
 mergemate/
-  domain/        Domain modelleri (ChangedFile, MavenModule, ImpactAnalysis, ...)
-  git/           merge-base diff motoru, geçici worktree yönetimi
-  maven/         Wrapper tespiti, JDK tespiti, proje yükleyici
-  impact/        Modül grafiği, dosya eşleyici, risk motoru, ImpactAnalyzer
-  execution/     ExecutionAdapter ABC, LocalWorktreeAdapter, CurrentWorkspaceAdapter
-  reporting/     Console ve JSON raporlama
+  domain/        Tüm domain modelleri
+  git/           merge-base diff, geçici worktree yönetimi
+  maven/         wrapper, JDK tespiti, proje yükleyici, komut oluşturucu
+  impact/        modül grafiği, dosya eşleyici, risk motoru, ImpactAnalyzer
+  java_analysis/ Java parser (javalang+regex), class graph, test finder, scorer
+  execution/     ExecutionAdapter ABC, LocalWorktreeAdapter, runner
+  reporting/     console, JSON, dosya raporu
   config/        .mergemate.yml yükleyici
-  cli/           argparse CLI giriş noktası
+  cli/           analyze/test/compile/verify CLI komutları
 
-# Opsiyonel Docker katmanı (mevcut, ikincil adapter):
-forge_worker/    Git guard, validation lifecycle, hardened Dockerfile
-forge_orchestrator/  Docker Worker, Orchestrator, orphan reaper
-forge_api/       FastAPI REST API + SQLite repository
-forge_spi/       ValidationStep ABC + Git/Maven plugin'leri
-forge_analysis/  Hata analizi (FailureAnalyzer)
+# Opsiyonel Docker katmanı:
+forge_worker/    git guard, lifecycle, Dockerfile
+forge_orchestrator/  Worker, Orchestrator, reaper
+forge_api/       FastAPI REST API + SQLite
+forge_spi/       ValidationStep ABC + plugin'ler
+forge_analysis/  FailureAnalyzer
 web/             React + Vite + TypeScript dashboard
 ```
 
 ## Testler
 
 ```bash
+# Tüm testler
 py -m pytest tests/ -v
 
-# Entegrasyon testleri (gerçek git gerektirir)
+# Sadece entegrasyon testleri (gerçek git gerektirir)
 py -m pytest tests/ -v -m integration
 ```
 
-**270 test, tümü geçiyor.**
+**343 test, tümü geçiyor.**
 
 | Faz | İçerik | Testler |
 |-----|--------|---------|
-| 1 | Domain modeller, Git diff, Worktree adapter, JDK tespiti, CLI | 43 |
-| 2 | Maven proje yükleyici, modül grafiği, dosya eşleyici, risk motoru, ImpactAnalyzer, raporlama | 36 |
-| Slice 1-7 | forge_* paketleri (orijinal Docker tabanlı altyapı) | 191 |
+| Faz 1 | Domain, Git diff, Worktree, JDK, CLI | 43 |
+| Faz 2 | Maven proje, modül grafiği, etki analizi, risk, raporlama | 36 |
+| Faz 3 | Java source parser, class graph, test finder, test scorer | 31 |
+| Faz 4 | Komut oluşturucu, runner, rapor dosyası, E2E testi | 42 |
+| Slice 1-7 | forge_* paketleri (Docker tabanlı altyapı) | 191 |
 
-## Sonraki adımlar (Faz 3-5)
-
-- **Faz 3**: JavaParser tabanlı source analyzer, ters bağımlılık grafiği, test aday puanlama
-- **Faz 4**: Compile/verify profilleri, JSON/HTML rapor dosyaları, timeout ve iptal
-- **Faz 5**: Docker adapter düzeltmeleri, FastAPI async, web UI adaptasyonu
+E2E testleri (`tests/test_e2e.py`): gerçek git repo + POM parse + ImpactAnalyzer — Maven kurulumu **gerekmez**.
 
 ## Docker modu (opsiyonel)
 
 ```bash
-# Backend
-pip install -e ".[dev]"
 docker build -t mergemate-worker:latest forge_worker/
 python -m forge_api.main   # → http://localhost:8080
-
-# Frontend
 cd web && npm install && npm run dev   # → http://localhost:5173
 ```
