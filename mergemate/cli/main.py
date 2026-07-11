@@ -1,7 +1,7 @@
 import argparse
 import sys
 import os
-from mergemate.cli.analyze_cmd import run_analyze
+from mergemate.cli.analyze_cmd import run_analyze, run_test, run_compile, run_verify
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
     analyze_p.add_argument("--impact-depth", type=int, default=None,
                            help="Max transitive dependency depth (default: 3)")
 
-    # test / compile / verify subcommands — Phase 2: call run_analyze with goal set
+    # test / compile / verify subcommands — Phase 4: fully wired with Maven execution
     for cmd in ("test", "compile", "verify"):
         p = subparsers.add_parser(cmd, help=f"Run {cmd} on affected modules")
         p.add_argument("--source", default="HEAD")
@@ -37,10 +37,15 @@ def main():
 
     if args.command == "analyze":
         run_analyze(args)
-    elif args.command in ("test", "compile", "verify"):
-        args.goal = args.command
-        args.json = False
-        run_analyze(args)
+    elif args.command == "test":
+        exit_code = run_test(args)
+        sys.exit(exit_code)
+    elif args.command == "compile":
+        exit_code = run_compile(args)
+        sys.exit(exit_code)
+    elif args.command == "verify":
+        exit_code = run_verify(args)
+        sys.exit(exit_code)
     else:
         print(f"Unknown command: {args.command}", file=sys.stderr)
         sys.exit(1)

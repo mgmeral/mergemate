@@ -130,3 +130,46 @@ class ValidationPlan:
     impact: ImpactAnalysis
     maven_command: Optional[MavenCommand]   # None for analyze-only
     profile: str           # "analyze", "test", "compile", "verify", "full"
+
+
+@dataclass
+class ValidationExecution:
+    run_id: str
+    status: str                    # "success", "failure", "error", "timeout", "cancelled", "skipped"
+    started_at: str                # ISO 8601
+    finished_at: Optional[str]
+    exit_code: Optional[int]
+    duration_seconds: float
+    maven_command: Optional[MavenCommand]
+    stdout_path: Optional[str]    # path to stdout.log
+    stderr_path: Optional[str]    # path to stderr.log
+    report_dir: Optional[str]
+    error_message: Optional[str]
+    timed_out: bool = False
+
+
+def determine_status(
+    exit_code: Optional[int],
+    timed_out: bool,
+    maven_command: Optional[MavenCommand],
+    error_message: Optional[str] = None,
+) -> str:
+    """
+    Determine validation status from execution outcome.
+
+    Rules:
+    - Maven exit code 0 -> "success"
+    - Maven exit code != 0 (compile/test failure) -> "failure" (NOT "error")
+    - Timeout -> "timeout"
+    - Internal exception (git, worktree, etc.) -> "error"
+    - No Maven command (analyze-only) -> "skipped"
+    """
+    if maven_command is None:
+        return "skipped"
+    if timed_out:
+        return "timeout"
+    if error_message is not None and exit_code is None:
+        return "error"
+    if exit_code == 0:
+        return "success"
+    return "failure"

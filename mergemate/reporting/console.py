@@ -3,7 +3,7 @@ Console output formatter for MergeMate impact analysis.
 """
 from __future__ import annotations
 
-from mergemate.domain.models import ImpactAnalysis, GitChangeSet, ValidationPlan
+from mergemate.domain.models import ImpactAnalysis, GitChangeSet, ValidationPlan, ValidationExecution
 
 
 def print_analyze_report(
@@ -149,3 +149,27 @@ def print_analyze_report(
         print("Strategy: full build")
     else:
         print("Strategy: incremental")
+
+
+def print_validation_result(execution: ValidationExecution) -> None:
+    """
+    Print the validation result summary after Maven completes.
+
+    Format:
+    Result: SUCCESS (42s)
+    Report: .mergemate/runs/abc-123/report.json
+
+    or:
+    Result: TIMEOUT (1800s)
+    Maven process was killed after timeout.
+    """
+    duration = int(execution.duration_seconds)
+    status = execution.status.upper()
+    print(f"Result: {status} ({duration}s)")
+
+    if execution.timed_out:
+        print("Maven process was killed after timeout.")
+
+    if execution.report_dir:
+        report_path = execution.report_dir.rstrip("/\\")
+        print(f"Report: {report_path}/report.json")
