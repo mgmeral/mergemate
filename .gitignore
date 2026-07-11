@@ -5,4 +5,6 @@ __pycache__/
 node_modules/
 *.egg-info/
 dist/
+web/dist/
+web/node_modules/
 .env
