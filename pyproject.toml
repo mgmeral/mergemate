@@ -23,4 +23,4 @@ python_functions = ["test_*"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["forge_planner*"]
+include = ["forge_planner*", "forge_worker*"]
