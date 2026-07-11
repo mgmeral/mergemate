@@ -63,6 +63,10 @@ def run_analyze(args):
     plan = None
     if project:
         from mergemate.impact.analyzer import ImpactAnalyzer
+        # Allow --impact-depth to override config
+        impact_depth = getattr(args, "impact_depth", None)
+        if impact_depth is not None:
+            config.impact_max_depth = impact_depth
         analyzer = ImpactAnalyzer(config)
         impact = analyzer.analyze(changeset, project, repo_dir)
         if goal:

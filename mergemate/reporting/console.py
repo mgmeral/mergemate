@@ -123,6 +123,24 @@ def print_analyze_report(
     print(f"Full validation recommended: {full_rec}")
     print()
 
+    # Selected tests (Java analysis)
+    if impact.test_candidates:
+        print("Selected tests:")
+        max_name_len = max(len(c.class_name) for c in impact.test_candidates)
+        for candidate in impact.test_candidates:
+            name_pad = " " * (max_name_len - len(candidate.class_name) + 2)
+            conf_pad = " " * (6 - len(candidate.confidence) + 2)
+            print(f"  {candidate.class_name}{name_pad}{candidate.confidence}{conf_pad}{candidate.score:.2f}")
+        # Print reasons for HIGH confidence tests
+        high_tests = [c for c in impact.test_candidates if c.confidence == "HIGH"]
+        if high_tests:
+            print()
+            for candidate in high_tests:
+                print(f"  Reasons ({candidate.class_name}):")
+                for reason in candidate.reasons:
+                    print(f"    - {reason}")
+        print()
+
     # Maven command
     if plan is not None and plan.maven_command is not None:
         print("Recommended Maven command:")

@@ -122,7 +122,51 @@ class ImpactAnalyzer:
                     reason="Upstream dependency (added by -am)",
                 ))
 
-        return ImpactAnalysis(
+        # 8. Optional: Java source analysis (if changed Java files exist)
+        test_candidates = []
+        if changeset.java_production_files and project:
+            try:
+                from mergemate.java_analysis.test_finder import (
+                    find_test_classes,
+                    find_production_classes,
+                )
+                from mergemate.java_analysis.class_graph import JavaDependencyGraph
+                from mergemate.java_analysis.test_scorer import score_test_candidates
+
+                # Parse changed production classes
+                changed_paths = [f.path for f in changeset.java_production_files]
+                prod_classes = find_production_classes(project_dir, project, changed_paths)
+
+                # Discover test classes in affected modules
+                test_classes = find_test_classes(project_dir, project)
+
+                # Build class dependency graph
+                graph = JavaDependencyGraph(prod_classes + test_classes)
+
+                affected_ids = {m.artifact_id for m in affected_modules}
+
+                all_candidates = []
+                for prod_cls in prod_classes:
+                    candidates = score_test_candidates(
+                        prod_cls, test_classes, graph, project, affected_ids,
+                        max_depth=self.config.impact_max_depth,
+                    )
+                    for c in candidates:
+                        if c not in all_candidates:
+                            all_candidates.append(c)
+
+                # Sort by score, deduplicate by class_name
+                seen: set[str] = set()
+                unique_candidates = []
+                for c in sorted(all_candidates, key=lambda x: x.score, reverse=True):
+                    if c.class_name not in seen:
+                        seen.add(c.class_name)
+                        unique_candidates.append(c)
+                test_candidates = unique_candidates
+            except Exception:
+                pass  # Java analysis is best-effort; never fail the whole pipeline
+
+        impact = ImpactAnalysis(
             strategy=strategy,
             strategy_reason=strategy_reason,
             changed_modules=sorted(changed_module_ids),
@@ -130,7 +174,9 @@ class ImpactAnalyzer:
             risk_level=risk_level,
             risk_reasons=risk_reasons,
             full_build_recommended=full_build_recommended,
+            test_candidates=test_candidates,
         )
+        return impact
 
     def build_validation_plan(
         self,

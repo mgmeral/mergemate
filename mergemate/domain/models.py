@@ -1,6 +1,33 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Literal, Optional, TYPE_CHECKING
+
+
+@dataclass
+class JavaClassInfo:
+    """Parsed information from a single Java source file."""
+    class_name: str            # simple name, e.g. "OrderService"
+    qualified_name: str        # fully qualified, e.g. "com.example.OrderService"
+    package: str               # e.g. "com.example"
+    file_path: str             # relative path
+    is_test_class: bool        # True if in src/test/java or has @Test annotation
+    imports: list[str]         # all import statements (fully qualified)
+    extends: list[str]         # parent class names (simple or qualified)
+    implements: list[str]      # implemented interface names
+    referenced_types: list[str]  # all type names referenced (fields, params, returns, etc.)
+    annotations: list[str]     # class-level annotation names
+
+
+@dataclass
+class TestCandidate:
+    """A test class that may be relevant for a changed production class."""
+    class_name: str             # e.g. "OrderServiceTest"
+    file_path: str              # relative to repo root
+    module_artifact_id: str     # Maven module it belongs to
+    score: float                # 0.0 - 1.0
+    confidence: str             # "HIGH", "MEDIUM", "LOW"
+    reasons: list[str]          # human-readable explanation of score
+    is_integration_test: bool   # True for *IT.java, *IntegrationTest.java
 
 
 @dataclass
@@ -88,6 +115,7 @@ class ImpactAnalysis:
     risk_reasons: list[str]
     full_build_recommended: bool
     jdk_compatibility: Optional[JdkCompatibility] = None
+    test_candidates: list["TestCandidate"] = field(default_factory=list)
 
 
 @dataclass

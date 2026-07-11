@@ -19,6 +19,8 @@ def main():
     analyze_p.add_argument("--profiles", default="", help="Comma-separated Maven profiles")
     analyze_p.add_argument("--repo-dir", default=None, help="Repository directory (default: cwd)")
     analyze_p.add_argument("--json", action="store_true", help="Output JSON")
+    analyze_p.add_argument("--impact-depth", type=int, default=None,
+                           help="Max transitive dependency depth (default: 3)")
 
     # test / compile / verify subcommands — Phase 2: call run_analyze with goal set
     for cmd in ("test", "compile", "verify"):
@@ -28,6 +30,8 @@ def main():
         p.add_argument("--profiles", default="")
         p.add_argument("--repo-dir", default=None)
         p.add_argument("--full", action="store_true", help="Force full build")
+        p.add_argument("--impact-depth", type=int, default=None,
+                       help="Max transitive dependency depth (default: 3)")
 
     args = parser.parse_args()
 
