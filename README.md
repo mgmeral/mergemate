@@ -1,100 +1,183 @@
 # MergeMate
 
-MergeMate is a Docker-based **local CI platform**. A developer picks a repo, a feature branch, a target branch, and a validation profile, and clicks Start. The system clones the repo into a **disposable, isolated Docker worker**, validates (merge-conflict check, incremental Maven build, tests, static analysis), reports, and destroys the worker. The developer's machine and repository are never touched.
+MergeMate, büyük monolith ve Maven multi-module projelerde **PR/MR açılmadan önce** lokal olarak çalışan bir Test Impact Analysis ve Validation Planner aracıdır.
 
-## Safety model
+Amaç: Jenkins üzerinde her PR için yaklaşık 1 saat süren full build'lerin tükettiği agent kapasitesini azaltmak. MergeMate yalnızca gerçekten etkilenen modülleri ve testleri seçer.
 
-- The user's working copy is **never used** — every validation clones fresh into an ephemeral container.
-- SSH key is mounted **read-only**; no passwords, PATs, or stored credentials.
-- A **git guard** enforces an argv-level allow-list; `push`, `commit`, `tag`, `rebase`, and all destructive operations are rejected at the policy layer before any subprocess is created.
-- Workers are self-destructing; an **orphan reaper** cleans up containers by label even if the orchestrator crashes.
+## Temel kullanım
 
-## Architecture
+```bash
+# Sadece analiz — Maven çalıştırmaz
+mergemate analyze --target origin/premaster
 
-```
-forge_planner/        Build Planner: POM parse → dep graph → changeset → ExecutionPlan
-forge_worker/         Git Guard (allow-list) + Validation Lifecycle + hardened Dockerfile
-forge_orchestrator/   Docker Worker, Orchestrator, orphan reaper
-forge_api/            FastAPI REST API + SQLite repository
-forge_spi/            ValidationStep ABC + Git and Maven reference plugins
-forge_analysis/       Failure analysis: structured summary, root cause, confidence
-web/                  React + Vite + TypeScript dashboard (dark mode)
-```
+# Seçili testleri çalıştır
+mergemate test --target origin/premaster
 
-## Build Planner
+# Etkilenen modülleri compile et
+mergemate compile --target origin/premaster
 
-Pipeline: `changed files → changed modules → dependency graph → affected modules → execution plan → optimised Maven command`
+# Etkilenen modülleri verify et
+mergemate verify --target origin/premaster
 
-- Discovers modules by recursively following `<modules>` from the root `pom.xml`
-- Resolves groupId/version from `<parent>` elements
-- Includes modules from active Maven profiles (`activeByDefault` or explicit)
-- Strategy: **full build** if a global POM changed or impact ratio ≥ 60%; otherwise **incremental** (`mvn clean verify -pl :a,:b -am`)
-- Labels each planned module: `changed` / `dependent` / `dependency`
-- Duration estimate: transparent heuristic (30 s + 10 s per `*Test.java` / `*IT.java`), replaceable by historical data
+# Kaynak branch açıkça belirtmek için
+mergemate analyze --source HEAD --target origin/premaster
 
-CLI:
-```
-python -m forge_planner.cli <repo_root> <changed_file> [<changed_file> ...]
+# Maven profilleri ile
+mergemate analyze --target origin/premaster --profiles local,dev
+
+# JSON çıktısı
+mergemate analyze --target origin/premaster --json
 ```
 
-## API
+## Nasıl çalışır
 
+1. **Merge-base diff**: `git merge-base` üzerinden gerçek değişen dosyaları bulur (iki noktalı diff değil).
+2. **Modül eşleme**: Her değişen dosyayı en derin Maven modülüne atar.
+3. **Etki analizi**: Ters bağımlılık grafı üzerinden etkilenen downstream modülleri bulur.
+4. **Risk değerlendirmesi**: Root POM değişikliği, kritik modüller, yüksek etki oranı → full build önerir.
+5. **Maven komutu üretir**: `./mvnw -pl :order-service,:checkout-api -am test` gibi hedefli komutlar.
+6. **Geçici worktree**: Kullanıcının çalışma kopyasına dokunmaz; geçici git worktree kullanır.
+
+## Örnek analiz çıktısı
+
+```text
+MergeMate Impact Analysis
+
+Source: HEAD
+Target: origin/premaster
+Merge base: abc1234
+
+JDK:
+  Required: 17
+  Maven runtime: 17.0.12
+  Compatible: yes
+  Detected from: root pom.xml -> maven.compiler.release
+
+Changed modules:
+  order-service
+
+Affected modules:
+  order-service       changed
+  checkout-api        dependent
+  shared-common       dependency
+
+Risk: MEDIUM
+Full validation recommended: NO
+
+Recommended Maven command:
+  ./mvnw -pl :order-service,:checkout-api -am test
 ```
-POST /api/v1/validations          Start a validation
-GET  /api/v1/validations/{run_id} Get a run (with execution plan + failure analysis)
-GET  /api/v1/validations          List recent runs
-GET  /api/v1/health               Health check
-```
 
-Persistence: SQLite (`MERGEMATE_DB_PATH` env var, default `mergemate.db`).
+## Kurulum
 
-## Running
-
-**Backend:**
 ```bash
 pip install -e ".[dev]"
-MERGEMATE_WORKER_IMAGE=mergemate-worker:latest \
-MERGEMATE_SSH_KEY_PATH=~/.ssh/id_rsa \
-python -m forge_api.main
 ```
 
-**Worker image:**
-```bash
-docker build -t mergemate-worker:latest forge_worker/
+## Çalışma modu: Lokal Worktree (varsayılan)
+
+Kullanıcının mevcut lokal ortamını kullanır:
+- Maven executable veya Maven wrapper (`./mvnw` öncelikli)
+- Mevcut JDK ve `JAVA_HOME`
+- Lokal `.m2` cache
+- VPN ve Nexus erişimi
+
+Kullanıcının working tree'sine **dokunulmaz**. Geçici `git worktree` oluşturulur, iş bitince temizlenir (hata durumunda da garanti).
+
+## JDK tespiti
+
+POM dosyalarından otomatik tespit:
+1. `maven.compiler.release` property
+2. `maven-compiler-plugin` `<release>` configuration
+3. `java.version` / `jdk.version` property
+4. `maven.compiler.source` / `target` (fallback)
+5. Parent POM zinciri takibi
+
+Uyumsuzluk durumunda anlaşılır hata:
+```text
+Project requires JDK 17 but Maven is running with JDK 11.
+Configure JAVA_HOME or Maven Toolchains before running validation.
 ```
 
-**Frontend:**
-```bash
-cd web && npm install && npm run dev
-# → http://localhost:5173 (proxies /api to localhost:8080)
+## Config dosyası
+
+Repo root'unda opsiyonel `.mergemate.yml`:
+
+```yaml
+targetBranch: origin/premaster
+
+impact:
+  maxDepth: 3
+  fullBuildThreshold: 0.60
+
+modules:
+  alwaysFullBuild:
+    - shared-common
+    - platform-core
+
+files:
+  fullBuildPatterns:
+    - "**/application*.yml"
+    - "**/db/changelog/**"
+
+timeouts:
+  testSeconds: 1800
+  verifySeconds: 3600
 ```
 
-## Tests
+## Mimari
+
+```
+mergemate/
+  domain/        Domain modelleri (ChangedFile, MavenModule, ImpactAnalysis, ...)
+  git/           merge-base diff motoru, geçici worktree yönetimi
+  maven/         Wrapper tespiti, JDK tespiti, proje yükleyici
+  impact/        Modül grafiği, dosya eşleyici, risk motoru, ImpactAnalyzer
+  execution/     ExecutionAdapter ABC, LocalWorktreeAdapter, CurrentWorkspaceAdapter
+  reporting/     Console ve JSON raporlama
+  config/        .mergemate.yml yükleyici
+  cli/           argparse CLI giriş noktası
+
+# Opsiyonel Docker katmanı (mevcut, ikincil adapter):
+forge_worker/    Git guard, validation lifecycle, hardened Dockerfile
+forge_orchestrator/  Docker Worker, Orchestrator, orphan reaper
+forge_api/       FastAPI REST API + SQLite repository
+forge_spi/       ValidationStep ABC + Git/Maven plugin'leri
+forge_analysis/  Hata analizi (FailureAnalyzer)
+web/             React + Vite + TypeScript dashboard
+```
+
+## Testler
 
 ```bash
 py -m pytest tests/ -v
+
+# Entegrasyon testleri (gerçek git gerektirir)
+py -m pytest tests/ -v -m integration
 ```
 
-**191 tests, all passing.** Covers: POM parsing and profile activation, dependency graph, changeset mapping, strategy selection, git guard allow/reject matrix (38 cases), lifecycle step ordering, Docker worker mocking, API endpoints, SQLite repository, plugin SPI, and failure analysis patterns.
+**270 test, tümü geçiyor.**
 
-## Status
+| Faz | İçerik | Testler |
+|-----|--------|---------|
+| 1 | Domain modeller, Git diff, Worktree adapter, JDK tespiti, CLI | 43 |
+| 2 | Maven proje yükleyici, modül grafiği, dosya eşleyici, risk motoru, ImpactAnalyzer, raporlama | 36 |
+| Slice 1-7 | forge_* paketleri (orijinal Docker tabanlı altyapı) | 191 |
 
-All 7 slices are complete:
+## Sonraki adımlar (Faz 3-5)
 
-| Slice | What | Tests |
-|-------|------|-------|
-| 1 | Build Planner | 16 |
-| 2 | Worker Safety Spine (git guard + lifecycle + Dockerfile) | +46 |
-| 3 | Docker orchestration (Worker, Orchestrator, reaper) | +31 |
-| 4 | FastAPI API + SQLite persistence | +28 |
-| 5 | Plugin SPI (ValidationStep ABC + Git + Maven plugins) | +44 |
-| 6 | React + Vite + TypeScript Web UI | (browser-tested) |
-| 7 | Failure analysis (pattern matching, confidence, root cause) | +27 |
+- **Faz 3**: JavaParser tabanlı source analyzer, ters bağımlılık grafiği, test aday puanlama
+- **Faz 4**: Compile/verify profilleri, JSON/HTML rapor dosyaları, timeout ve iptal
+- **Faz 5**: Docker adapter düzeltmeleri, FastAPI async, web UI adaptasyonu
 
-UI testing requires a running browser — TypeScript compiles in strict mode; run `cd web && npm install && tsc --noEmit` to verify types.
+## Docker modu (opsiyonel)
 
-## Docs
+```bash
+# Backend
+pip install -e ".[dev]"
+docker build -t mergemate-worker:latest forge_worker/
+python -m forge_api.main   # → http://localhost:8080
 
-- `docs/adr/001-scope-and-stack.md` — Scope and technology choices
-- `docs/adr/002-ephemeral-worker-safety.md` — Safety model ADR
-- `docs/build-planner-algorithm.md` — Build planner algorithm
+# Frontend
+cd web && npm install && npm run dev   # → http://localhost:5173
+```
