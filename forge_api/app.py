@@ -17,6 +17,7 @@ from forge_api.models import (
     ValidationListResponse,
     ValidationRunResponse,
 )
+from forge_analysis.analyzer import FailureAnalyzer
 from forge_api.repository import SQLiteRunRepository, ValidationRunRepository
 from forge_orchestrator.orchestrator import (
     Orchestrator,
@@ -32,12 +33,27 @@ logger = logging.getLogger(__name__)
 # Conversion helper
 # ---------------------------------------------------------------------------
 
+_failure_analyzer = FailureAnalyzer()
+
+
 def run_to_response(run: ValidationRun) -> ValidationRunResponse:
     """Convert a ValidationRun domain object to the API response model."""
     # Retrieve execution_plan if stored as a private attribute
     execution_plan: Optional[dict] = None
     if hasattr(run, "_execution_plan"):
         execution_plan = run._execution_plan  # type: ignore[attr-defined]
+
+    # Compute failure analysis on the fly (not persisted)
+    failure_summary = _failure_analyzer.analyze(
+        run_id=run.run_id,
+        status=run.status,
+        lifecycle_log=run.lifecycle_log,
+        has_conflicts=run.has_conflicts,
+        conflict_files=run.conflict_files,
+        error_message=run.error_message,
+    )
+    import dataclasses
+    failure_analysis: Optional[dict] = dataclasses.asdict(failure_summary)
 
     return ValidationRunResponse(
         run_id=run.run_id,
@@ -51,6 +67,7 @@ def run_to_response(run: ValidationRun) -> ValidationRunResponse:
         lifecycle_log=run.lifecycle_log,
         error_message=run.error_message,
         execution_plan=execution_plan,
+        failure_analysis=failure_analysis,
     )
 
 
