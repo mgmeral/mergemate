@@ -22,13 +22,18 @@ dev = [
     "pytest>=8",
     "httpx>=0.27",
 ]
+yaml = ["pyyaml>=6"]
+
+[project.scripts]
+mergemate = "mergemate.cli.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = ["integration: requires real git and filesystem"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["forge_planner*", "forge_worker*", "forge_orchestrator*", "forge_api*", "forge_spi*", "forge_analysis*"]
+include = ["forge_planner*", "forge_worker*", "forge_orchestrator*", "forge_api*", "forge_spi*", "forge_analysis*", "mergemate*"]
