@@ -195,7 +195,7 @@ py -m pytest tests/ -v
 py -m pytest tests/ -v -m integration
 ```
 
-**343 test, tümü geçiyor.**
+**402 test, tümü geçiyor.**
 
 | Faz | İçerik | Testler |
 |-----|--------|---------|
@@ -203,6 +203,7 @@ py -m pytest tests/ -v -m integration
 | Faz 2 | Maven proje, modül grafiği, etki analizi, risk, raporlama | 36 |
 | Faz 3 | Java source parser, class graph, test finder, test scorer | 31 |
 | Faz 4 | Komut oluşturucu, runner, rapor dosyası, E2E testi | 42 |
+| Faz 5 | Docker adapter (path/timeout/decode düzeltmeleri), FastAPI async, lifecycle fix | 59 |
 | Slice 1-7 | forge_* paketleri (Docker tabanlı altyapı) | 191 |
 
 E2E testleri (`tests/test_e2e.py`): gerçek git repo + POM parse + ImpactAnalyzer — Maven kurulumu **gerekmez**.
