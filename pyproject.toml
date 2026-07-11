@@ -31,4 +31,4 @@ python_functions = ["test_*"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["forge_planner*", "forge_worker*", "forge_orchestrator*", "forge_api*"]
+include = ["forge_planner*", "forge_worker*", "forge_orchestrator*", "forge_api*", "forge_spi*"]
