@@ -12,11 +12,15 @@ license = { text = "MIT" }
 
 dependencies = [
     "docker>=7",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "httpx>=0.27",
 ]
 
 [tool.pytest.ini_options]
@@ -27,4 +31,4 @@ python_functions = ["test_*"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["forge_planner*", "forge_worker*", "forge_orchestrator*"]
+include = ["forge_planner*", "forge_worker*", "forge_orchestrator*", "forge_api*"]
