@@ -33,6 +33,8 @@ class ValidationRunResponse(BaseModel):
     error_message: Optional[str]
     # Embedded execution plan (may be None if not yet computed or conflicts)
     execution_plan: Optional[dict]
+    # Failure analysis (re-computed on the fly, not persisted)
+    failure_analysis: Optional[dict] = None
 
 
 class ValidationListResponse(BaseModel):
