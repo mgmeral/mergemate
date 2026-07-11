@@ -20,7 +20,7 @@ def main():
     analyze_p.add_argument("--repo-dir", default=None, help="Repository directory (default: cwd)")
     analyze_p.add_argument("--json", action="store_true", help="Output JSON")
 
-    # Stub subcommands (Phase 2+)
+    # test / compile / verify subcommands — Phase 2: call run_analyze with goal set
     for cmd in ("test", "compile", "verify"):
         p = subparsers.add_parser(cmd, help=f"Run {cmd} on affected modules")
         p.add_argument("--source", default="HEAD")
@@ -33,8 +33,12 @@ def main():
 
     if args.command == "analyze":
         run_analyze(args)
+    elif args.command in ("test", "compile", "verify"):
+        args.goal = args.command
+        args.json = False
+        run_analyze(args)
     else:
-        print(f"Command '{args.command}' will be available in Phase 2.", file=sys.stderr)
+        print(f"Unknown command: {args.command}", file=sys.stderr)
         sys.exit(1)
 
 
