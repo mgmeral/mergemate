@@ -173,3 +173,4 @@ def print_validation_result(execution: ValidationExecution) -> None:
     if execution.report_dir:
         report_path = execution.report_dir.rstrip("/\\")
         print(f"Report: {report_path}/report.json")
+        print(f"HTML:   {report_path}/report.html")

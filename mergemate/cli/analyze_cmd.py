@@ -262,6 +262,8 @@ def run_validation(args, goal: str) -> int:
             plan=plan,
             result=exec_result,
             run_id=run_id,
+            working_dir=working_dir,
+            status=status,
         )
         if exec_result and exec_result.stdout:
             stdout_path = os.path.join(report_dir, "stdout.log")
