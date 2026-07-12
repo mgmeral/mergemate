@@ -15,6 +15,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from forge_api.models import (
+    StartLocalAnalysisRequest,
     StartValidationRequest,
     ValidationListResponse,
     ValidationRunResponse,
@@ -45,6 +46,11 @@ def run_to_response(run: ValidationRun) -> ValidationRunResponse:
     if hasattr(run, "_execution_plan"):
         execution_plan = run._execution_plan  # type: ignore[attr-defined]
 
+    # Retrieve impact data stored by the local analysis pipeline
+    impact_data: Optional[dict] = None
+    if hasattr(run, "_impact_data"):
+        impact_data = run._impact_data  # type: ignore[attr-defined]
+
     # Compute failure analysis on the fly (not persisted)
     failure_summary = _failure_analyzer.analyze(
         run_id=run.run_id,
@@ -56,6 +62,15 @@ def run_to_response(run: ValidationRun) -> ValidationRunResponse:
     )
     import dataclasses
     failure_analysis: Optional[dict] = dataclasses.asdict(failure_summary)
+
+    # Extract impact-analysis fields from stored impact_data blob
+    affected_modules: Optional[list[dict]] = None
+    selected_tests: Optional[list[str]] = None
+    risk_level: Optional[str] = None
+    if impact_data:
+        affected_modules = impact_data.get("affected_modules")
+        selected_tests = impact_data.get("selected_tests")
+        risk_level = impact_data.get("risk_level")
 
     return ValidationRunResponse(
         run_id=run.run_id,
@@ -70,6 +85,9 @@ def run_to_response(run: ValidationRun) -> ValidationRunResponse:
         error_message=run.error_message,
         execution_plan=execution_plan,
         failure_analysis=failure_analysis,
+        affected_modules=affected_modules,
+        selected_tests=selected_tests,
+        risk_level=risk_level,
     )
 
 
@@ -141,7 +159,7 @@ def _run_validation_background(
     orchestrator: Orchestrator,
     repository: ValidationRunRepository,
 ) -> None:
-    """Background task: run the full validation and update the repository."""
+    """Background task: run the full Docker-based validation and update the repository."""
     try:
         validation_request = ValidationRequest(
             repo_url=request.repo_url,
@@ -163,6 +181,100 @@ def _run_validation_background(
             repository.save(error_run)
         except Exception:  # noqa: BLE001
             logger.exception("Failed to save error run for run_id=%s", run_id)
+
+
+def _run_local_analysis_background(
+    run_id: str,
+    request: StartLocalAnalysisRequest,
+    repository: ValidationRunRepository,
+    pending_run: ValidationRun,
+) -> None:
+    """
+    Background task: run the mergemate ImpactAnalyzer pipeline on a local repo
+    and persist results including affected_modules, selected_tests, risk_level.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        from mergemate.git.diff import build_changeset
+        from mergemate.maven.project import load_project
+        from mergemate.impact.analyzer import ImpactAnalyzer
+        from mergemate.config.loader import MergeMateConfig
+
+        repo_dir = request.repo_dir
+        config = MergeMateConfig()
+
+        # 1. Build git changeset
+        changeset = build_changeset(repo_dir, request.source, request.target)
+
+        # 2. Load Maven project if pom.xml exists
+        import os
+        root_pom = os.path.join(repo_dir, "pom.xml")
+        project = None
+        if os.path.exists(root_pom):
+            project = load_project(root_pom, request.profiles)
+
+        # 3. Impact analysis
+        impact = None
+        if project:
+            analyzer = ImpactAnalyzer(config)
+            impact = analyzer.analyze(changeset, project, repo_dir)
+
+        # 4. Build maven command
+        maven_command_str: Optional[str] = None
+        if impact and request.goal != "analyze":
+            from mergemate.maven.command_builder import build_maven_command
+            cmd = build_maven_command(
+                project_dir=repo_dir,
+                impact=impact,
+                goal=request.goal,
+                test_candidates=impact.test_candidates or None,
+            )
+            maven_command_str = cmd.display_command
+
+        # 5. Assemble impact_data blob
+        impact_data: Optional[dict] = None
+        if impact:
+            affected_modules = [
+                {"artifact_id": m.artifact_id, "label": m.label, "reason": m.reason}
+                for m in impact.affected_modules
+            ]
+            selected_tests = [
+                c.class_name for c in (impact.test_candidates or [])
+                if c.confidence in ("HIGH", "MEDIUM")
+            ]
+            impact_data = {
+                "affected_modules": affected_modules,
+                "selected_tests": selected_tests,
+                "risk_level": impact.risk_level,
+                "strategy": impact.strategy,
+                "strategy_reason": impact.strategy_reason,
+                "full_build_recommended": impact.full_build_recommended,
+                "risk_reasons": impact.risk_reasons,
+                "changed_modules": impact.changed_modules,
+            }
+
+        # 6. Update the run with results
+        now = datetime.now(timezone.utc)
+        pending_run.status = "success"
+        pending_run.finished_at = now
+        pending_run.maven_command = maven_command_str
+        pending_run.changed_files = [cf.path for cf in changeset.changed_files]
+        pending_run._impact_data = impact_data  # type: ignore[attr-defined]
+        repository.save(pending_run)
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "Local analysis background task failed for run_id=%s: %s", run_id, exc
+        )
+        now = datetime.now(timezone.utc)
+        pending_run.status = "error"
+        pending_run.finished_at = now
+        pending_run.error_message = str(exc)
+        try:
+            repository.save(pending_run)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to save error state for run_id=%s", run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +355,55 @@ def create_app(
             request=request,
             orchestrator=app.state.orchestrator,
             repository=app.state.repository,
+        )
+
+        return run_to_response(pending_run)
+
+    @app.post("/api/v1/analyze", status_code=202, response_model=ValidationRunResponse)
+    def start_local_analysis(
+        request: StartLocalAnalysisRequest,
+        background_tasks: BackgroundTasks,
+    ):
+        """
+        Run a local impact analysis on a git repo directory.
+
+        Uses the mergemate ImpactAnalyzer pipeline (no Docker required).
+        Returns immediately with status='running'; poll GET /api/v1/validations/{run_id}.
+        """
+        import os
+        run_id = str(uuid.uuid4())
+        started_at = datetime.now(timezone.utc)
+
+        # Build a pending ValidationRun using repo_dir as repo_url (informational)
+        validation_request = ValidationRequest(
+            repo_url=request.repo_dir,
+            feature_branch=request.source,
+            target_branch=request.target,
+            validation_profile=request.goal,
+            active_maven_profiles=request.profiles,
+        )
+        pending_run = ValidationRun(
+            run_id=run_id,
+            request=validation_request,
+            status="running",
+            started_at=started_at,
+            finished_at=None,
+            has_conflicts=None,
+            changed_files=[],
+            conflict_files=[],
+            maven_command=None,
+            lifecycle_log=[],
+            error_message=None,
+        )
+        pending_run._impact_data = None  # type: ignore[attr-defined]
+        app.state.repository.save(pending_run)
+
+        background_tasks.add_task(
+            _run_local_analysis_background,
+            run_id=run_id,
+            request=request,
+            repository=app.state.repository,
+            pending_run=pending_run,
         )
 
         return run_to_response(pending_run)

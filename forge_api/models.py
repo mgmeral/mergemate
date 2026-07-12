@@ -20,6 +20,15 @@ class StartValidationRequest(BaseModel):
     active_maven_profiles: list[str] = []
 
 
+class StartLocalAnalysisRequest(BaseModel):
+    """Request model for local (non-Docker) impact analysis runs."""
+    repo_dir: str                     # absolute path to the local git repo
+    source: str = "HEAD"              # source ref (branch/commit to analyse)
+    target: str                       # target branch (e.g. "origin/main")
+    profiles: list[str] = []          # Maven active profiles
+    goal: str = "test"                # "analyze" | "test" | "compile" | "verify"
+
+
 class ValidationRunResponse(BaseModel):
     run_id: str
     status: str  # pending | running | success | failure | error

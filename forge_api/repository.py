@@ -57,9 +57,12 @@ CREATE TABLE IF NOT EXISTS validation_runs (
     maven_command TEXT,
     lifecycle_log TEXT NOT NULL,
     error_message TEXT,
-    execution_plan TEXT
+    execution_plan TEXT,
+    impact_data TEXT
 );
 """
+
+_MIGRATION_ADD_IMPACT_DATA = "ALTER TABLE validation_runs ADD COLUMN impact_data TEXT"
 
 
 def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -103,9 +106,14 @@ def _row_to_run(row: sqlite3.Row) -> ValidationRun:
         lifecycle_log=json.loads(row["lifecycle_log"]),
         error_message=row["error_message"],
     )
-    # Store execution_plan as an extra attribute if present
+    # Store execution_plan and impact_data as extra attributes
     execution_plan_raw = row["execution_plan"]
     run._execution_plan = json.loads(execution_plan_raw) if execution_plan_raw else None  # type: ignore[attr-defined]
+    try:
+        impact_raw = row["impact_data"]
+        run._impact_data = json.loads(impact_raw) if impact_raw else None  # type: ignore[attr-defined]
+    except Exception:
+        run._impact_data = None  # type: ignore[attr-defined]
     return run
 
 
@@ -137,14 +145,28 @@ class SQLiteRunRepository(ValidationRunRepository):
     def _init_db(self) -> None:
         conn = self._connect()
         conn.execute(_CREATE_TABLE_SQL)
+        # Migrate existing tables that predate impact_data column
+        try:
+            conn.execute(_MIGRATION_ADD_IMPACT_DATA)
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.commit()
 
-    def save(self, run: ValidationRun, execution_plan: Optional[dict] = None) -> None:
+    def save(
+        self,
+        run: ValidationRun,
+        execution_plan: Optional[dict] = None,
+        impact_data: Optional[dict] = None,
+    ) -> None:
         """Insert or update a run record."""
-        # Check for execution_plan stored as private attribute
+        # Check for execution_plan and impact_data stored as private attributes
         ep = execution_plan
         if ep is None and hasattr(run, "_execution_plan"):
             ep = run._execution_plan  # type: ignore[attr-defined]
+
+        id_ = impact_data
+        if id_ is None and hasattr(run, "_impact_data"):
+            id_ = run._impact_data  # type: ignore[attr-defined]
 
         sql = """
         INSERT OR REPLACE INTO validation_runs (
@@ -152,13 +174,13 @@ class SQLiteRunRepository(ValidationRunRepository):
             validation_profile, active_maven_profiles,
             status, started_at, finished_at,
             has_conflicts, changed_files, conflict_files,
-            maven_command, lifecycle_log, error_message, execution_plan
+            maven_command, lifecycle_log, error_message, execution_plan, impact_data
         ) VALUES (
             :run_id, :repo_url, :feature_branch, :target_branch,
             :validation_profile, :active_maven_profiles,
             :status, :started_at, :finished_at,
             :has_conflicts, :changed_files, :conflict_files,
-            :maven_command, :lifecycle_log, :error_message, :execution_plan
+            :maven_command, :lifecycle_log, :error_message, :execution_plan, :impact_data
         )
         """
         params = {
@@ -180,6 +202,7 @@ class SQLiteRunRepository(ValidationRunRepository):
             "lifecycle_log": json.dumps(run.lifecycle_log),
             "error_message": run.error_message,
             "execution_plan": json.dumps(ep) if ep is not None else None,
+            "impact_data": json.dumps(id_) if id_ is not None else None,
         }
 
         conn = self._connect()
