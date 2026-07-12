@@ -132,6 +132,7 @@ class ImpactAnalyzer:
                 )
                 from mergemate.java_analysis.class_graph import JavaDependencyGraph
                 from mergemate.java_analysis.test_scorer import score_test_candidates
+                from mergemate.git.cochange import analyze_cochange
 
                 # Parse changed production classes
                 changed_paths = [f.path for f in changeset.java_production_files]
@@ -141,15 +142,30 @@ class ImpactAnalyzer:
                 test_classes = find_test_classes(project_dir, project)
 
                 # Build class dependency graph
-                graph = JavaDependencyGraph(prod_classes + test_classes)
+                java_graph = JavaDependencyGraph(prod_classes + test_classes)
 
                 affected_ids = {m.artifact_id for m in affected_modules}
+
+                # Historical co-change analysis (best-effort)
+                cochange_map = None
+                try:
+                    cochange_map = analyze_cochange(
+                        project_dir,
+                        changed_paths,
+                        max_commits=self.config.cochange_max_commits,
+                        days=self.config.cochange_days,
+                    )
+                    if cochange_map.is_empty():
+                        cochange_map = None
+                except Exception:
+                    cochange_map = None
 
                 all_candidates = []
                 for prod_cls in prod_classes:
                     candidates = score_test_candidates(
-                        prod_cls, test_classes, graph, project, affected_ids,
+                        prod_cls, test_classes, java_graph, project, affected_ids,
                         max_depth=self.config.impact_max_depth,
+                        cochange_map=cochange_map,
                     )
                     for c in candidates:
                         if c not in all_candidates:

@@ -3,6 +3,8 @@ TestCandidate scoring with confidence and reasons.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from mergemate.domain.models import JavaClassInfo, TestCandidate, MavenProject, ModuleImpact
 from mergemate.java_analysis.class_graph import JavaDependencyGraph
 from mergemate.java_analysis.test_finder import (
@@ -12,6 +14,13 @@ from mergemate.java_analysis.test_finder import (
     match_level2_references,
     match_level3_reverse_deps,
 )
+
+if TYPE_CHECKING:
+    from mergemate.git.cochange import CoChangeMap
+
+# Co-change thresholds
+COCHANGE_HIGH_THRESHOLD = 5
+COCHANGE_MEDIUM_THRESHOLD = 2
 
 # Score weights for each signal
 SCORE_WEIGHTS = {
@@ -25,6 +34,10 @@ SCORE_WEIGHTS = {
     "same_package": 0.08,
     "downstream_module": 0.05,
     "integration_test_penalty": -0.05,
+    # Historical co-change signals (from git log analysis)
+    "cochange_high": 0.15,     # co-changed >= 5 times
+    "cochange_medium": 0.10,   # co-changed 2-4 times
+    "cochange_low": 0.05,      # co-changed 1 time
 }
 
 CONFIDENCE_THRESHOLDS = {
@@ -41,6 +54,7 @@ def score_test_candidates(
     project: MavenProject,
     affected_module_ids: set[str],
     max_depth: int = 3,
+    cochange_map: "CoChangeMap | None" = None,
 ) -> list[TestCandidate]:
     """
     Score all test classes for relevance to changed_prod_class.
@@ -52,6 +66,11 @@ def score_test_candidates(
     4. Assign confidence (HIGH/MEDIUM/LOW)
 
     Return sorted by score descending. Only return candidates with score > 0.
+
+    Args:
+        cochange_map: optional CoChangeMap from git history analysis; provides
+                      additional signals when a test has historically co-changed
+                      with the production file being scored.
     """
     # Pre-compute level1, level2, level3 matches for this prod class
     l1_matches: dict[str, str] = {}
@@ -159,6 +178,32 @@ def score_test_candidates(
             signals["same_package"] = True
             reasons.append(f"In same package ({changed_prod_class.package})")
 
+        # Historical co-change signal
+        if cochange_map is not None:
+            count = _best_cochange_count(
+                cochange_map,
+                changed_prod_class.file_path,
+                tc.file_path,
+            )
+            if count >= COCHANGE_HIGH_THRESHOLD:
+                signals["cochange_high"] = True
+                reasons.append(
+                    f"Co-changed with {changed_prod_class.class_name} "
+                    f"in git history ({count} commits)"
+                )
+            elif count >= COCHANGE_MEDIUM_THRESHOLD:
+                signals["cochange_medium"] = True
+                reasons.append(
+                    f"Co-changed with {changed_prod_class.class_name} "
+                    f"in git history ({count} commits)"
+                )
+            elif count == 1:
+                signals["cochange_low"] = True
+                reasons.append(
+                    f"Co-changed with {changed_prod_class.class_name} "
+                    f"in git history (1 commit)"
+                )
+
         # Integration test penalty
         is_integration = _is_integration_test(tc)
         if is_integration:
@@ -185,6 +230,35 @@ def score_test_candidates(
     # Sort by score descending
     candidates.sort(key=lambda c: c.score, reverse=True)
     return candidates
+
+
+def _best_cochange_count(
+    cochange_map: "CoChangeMap",
+    prod_file: str,
+    test_file: str,
+) -> int:
+    """
+    Return the co-change count between a production file and a test file.
+
+    Tries both forward-slash and native-slash normalisation, and also
+    tries matching by filename in case relative-path representation differs
+    between the git log output and the class file_path attribute.
+    """
+    prod_norm = prod_file.replace("\\", "/")
+    test_norm = test_file.replace("\\", "/")
+
+    # Direct key lookup (most common case)
+    count = cochange_map.co_change_count(prod_norm, test_norm)
+    if count:
+        return count
+
+    # Fallback: scan all entries for matching test file basename
+    test_basename = test_norm.split("/")[-1] if "/" in test_norm else test_norm
+    for test_path, cnt in cochange_map.test_files_for(prod_norm).items():
+        if test_path.split("/")[-1] == test_basename:
+            return cnt
+
+    return 0
 
 
 def _is_integration_test(tc: JavaClassInfo) -> bool:

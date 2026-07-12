@@ -38,6 +38,10 @@ class MergeMateConfig:
         default_factory=lambda: ["**/*IT.java", "**/*IntegrationTest.java"]
     )
 
+    # Historical co-change analysis settings
+    cochange_max_commits: int = 100   # max git log commits to examine per file
+    cochange_days: int = 90           # look-back window in days
+
 
 def load_config(project_dir: str) -> MergeMateConfig:
     """
@@ -92,6 +96,8 @@ def load_config(project_dir: str) -> MergeMateConfig:
     _set_int(config, data, "timeoutVerify", "timeout_verify")
     _set_list(config, data, "unitTestPatterns", "unit_test_patterns")
     _set_list(config, data, "integrationTestPatterns", "integration_test_patterns")
+    _set_int(config, data, "cochangeMaxCommits", "cochange_max_commits")
+    _set_int(config, data, "cochangeDays", "cochange_days")
 
     return config
 
