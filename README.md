@@ -94,10 +94,23 @@ Her validation çalışmasında `.mergemate/runs/<run-id>/` altına yazılır:
 
 ```
 .mergemate/runs/<run-id>/
-  report.json       # Tam yapılandırılmış rapor
+  report.json       # Tam yapılandırılmış rapor (JSON)
+  report.html       # Standalone dark-mode HTML rapor (dış bağımlılık yok)
   stdout.log        # Maven stdout
   stderr.log        # Maven stderr
 ```
+
+### HTML Rapor
+
+`report.html` dosyası external CSS/JS gerektirmez, tek başına açılabilir.
+Şu bölümleri içerir: Git değişiklikleri, JDK bilgisi, etkilenen modüller,
+risk değerlendirmesi, seçili testler, Maven komutu, Surefire/Failsafe sonuçları.
+
+### Surefire/Failsafe sonuçları
+
+Maven çalıştıktan sonra tüm `target/surefire-reports/` ve `target/failsafe-reports/`
+klasörlerindeki `TEST-*.xml` dosyaları otomatik olarak parse edilir.
+`report.json` içinde `surefire` bloğu olarak yer alır.
 
 ## Config dosyası
 
@@ -147,6 +160,28 @@ Detected from:
 Configure JAVA_HOME or Maven Toolchains before running validation.
 ```
 
+## REST API entegrasyonu
+
+`forge_api` FastAPI sunucusu çalışırken local analiz şu endpoint ile tetiklenebilir:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_dir": "/path/to/your/project",
+    "source": "HEAD",
+    "target": "origin/main",
+    "goal": "test"
+  }'
+# → 202 Accepted, { "run_id": "...", "status": "running" }
+
+# Sonucu poll et
+curl http://localhost:8080/api/v1/validations/<run-id>
+# → { "status": "success", "affected_modules": [...], "selected_tests": [...], "risk_level": "MEDIUM" }
+```
+
+Web UI'da "Local Repo" sekmesi bu endpoint'i doğrudan kullanır.
+
 ## Test puanlama sinyalleri
 
 | Sinyal | Ağırlık |
@@ -161,6 +196,9 @@ Configure JAVA_HOME or Maven Toolchains before running validation.
 | Aynı package | 0.08 |
 | Downstream modülde | 0.05 |
 | IT testi (küçük ceza) | -0.05 |
+| Git geçmişinde ≥5 birlikte değişmiş | +0.15 |
+| Git geçmişinde 2-4 birlikte değişmiş | +0.10 |
+| Git geçmişinde 1 kez birlikte değişmiş | +0.05 |
 
 ## Mimari
 
@@ -195,15 +233,18 @@ py -m pytest tests/ -v
 py -m pytest tests/ -v -m integration
 ```
 
-**402 test, tümü geçiyor.**
+**483 test, tümü geçiyor.**
 
-| Faz | İçerik | Testler |
-|-----|--------|---------|
+| Faz / Özellik | İçerik | Testler |
+|---------------|--------|---------|
 | Faz 1 | Domain, Git diff, Worktree, JDK, CLI | 43 |
 | Faz 2 | Maven proje, modül grafiği, etki analizi, risk, raporlama | 36 |
 | Faz 3 | Java source parser, class graph, test finder, test scorer | 31 |
 | Faz 4 | Komut oluşturucu, runner, rapor dosyası, E2E testi | 42 |
-| Faz 5 | Docker adapter (path/timeout/decode düzeltmeleri), FastAPI async, lifecycle fix | 59 |
+| Faz 5 | Docker adapter, FastAPI async, lifecycle fix | 59 |
+| HTML rapor + Surefire | `report.html` + Surefire/Failsafe XML parser | 43 |
+| API entegrasyonu | `/api/v1/analyze` + impact_data SQLite kalıcılığı | 16 |
+| Co-change analizi | Git geçmişinden test puanlama sinyali | 22 |
 | Slice 1-7 | forge_* paketleri (Docker tabanlı altyapı) | 191 |
 
 E2E testleri (`tests/test_e2e.py`): gerçek git repo + POM parse + ImpactAnalyzer — Maven kurulumu **gerekmez**.
