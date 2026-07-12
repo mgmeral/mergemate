@@ -6,6 +6,14 @@ export interface StartValidationRequest {
   active_maven_profiles?: string[];
 }
 
+export interface StartLocalAnalysisRequest {
+  repo_dir: string;
+  source?: string;
+  target: string;
+  profiles?: string[];
+  goal?: string;
+}
+
 export interface PlannedModule {
   artifact_id: string;
   label: 'changed' | 'dependent' | 'dependency';

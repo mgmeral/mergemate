@@ -1,4 +1,4 @@
-import type { StartValidationRequest, ValidationRun } from './types';
+import type { StartLocalAnalysisRequest, StartValidationRequest, ValidationRun } from './types';
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8080';
 
@@ -27,6 +27,13 @@ export async function startValidation(req: StartValidationRequest): Promise<Vali
 
 export async function getRun(runId: string): Promise<ValidationRun> {
   return fetchJson<ValidationRun>(`/api/v1/validations/${encodeURIComponent(runId)}`);
+}
+
+export async function startLocalAnalysis(req: StartLocalAnalysisRequest): Promise<ValidationRun> {
+  return fetchJson<ValidationRun>('/api/v1/analyze', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
 }
 
 export async function listRuns(limit = 20): Promise<{ runs: ValidationRun[]; total: number }> {
